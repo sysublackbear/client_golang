@@ -380,6 +380,7 @@ func ExampleInstrumentHandlerDuration() {
 
 	// Instrument the handlers with all the metrics, injecting the "handler"
 	// label by currying.
+	// 多层包装，类似装饰器进行数据上报包装
 	pushChain := InstrumentHandlerInFlight(inFlightGauge,
 		InstrumentHandlerDuration(duration.MustCurryWith(prometheus.Labels{"handler": "push"}),
 			InstrumentHandlerCounter(counter,

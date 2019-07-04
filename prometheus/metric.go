@@ -27,6 +27,7 @@ const separatorByte byte = 255
 // A Metric models a single sample value with its meta data being exported to
 // Prometheus. Implementations of Metric in this package are Gauge, Counter,
 // Histogram, Summary, and Untyped.
+// prometheus元数据
 type Metric interface {
 	// Desc returns the descriptor for the Metric. This method idempotently
 	// returns the same descriptor throughout the lifetime of the
@@ -98,6 +99,7 @@ type Opts struct {
 // name from the name component in their Opts. Users of the library will only
 // need this function if they implement their own Metric or instantiate a Desc
 // (with NewDesc) directly.
+// 将namespace, subsystem和name用 _ 拼接起来，name不能为空
 func BuildFQName(namespace, subsystem, name string) string {
 	if name == "" {
 		return ""
@@ -150,6 +152,7 @@ type timestampedMetric struct {
 	t time.Time
 }
 
+// 调原来的Write方法，只是会更新当前时间
 func (m timestampedMetric) Write(pb *dto.Metric) error {
 	e := m.Metric.Write(pb)
 	pb.TimestampMs = proto.Int64(m.t.Unix()*1000 + int64(m.t.Nanosecond()/1000000))

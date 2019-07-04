@@ -76,6 +76,7 @@ func (e *expvarCollector) Describe(ch chan<- *Desc) {
 func (e *expvarCollector) Collect(ch chan<- Metric) {
 	for name, desc := range e.exports {
 		var m Metric
+		// 获取name对应的expVar
 		expVar := expvar.Get(name)
 		if expVar == nil {
 			continue
@@ -88,7 +89,7 @@ func (e *expvarCollector) Collect(ch chan<- Metric) {
 		}
 		var processValue func(v interface{}, i int)
 		processValue = func(v interface{}, i int) {
-			if i >= len(labels) {
+			if i >= len(labels) {  // 闭包
 				copiedLabels := append(make([]string, 0, len(labels)), labels...)
 				switch v := v.(type) {
 				case float64:
@@ -117,3 +118,5 @@ func (e *expvarCollector) Collect(ch chan<- Metric) {
 		processValue(v, 0)
 	}
 }
+
+// finish

@@ -148,5 +148,5 @@ client_golang
 
 ## 4.更多
 
-更多还是看官方的 [client_golang.README.md](http://baidu.com)吧。
+更多还是看官方的 [client_golang.README.md](https://github.com/sysublackbear/client_golang/blob/master/client_golang.README.md)吧。
 

@@ -29,6 +29,7 @@ import (
 // running goroutines.
 //
 // To create Gauge instances, use NewGauge.
+// Gauge: 一种常规的 metric，典型的应用如：温度，运行的 goroutines 的个数。
 type Gauge interface {
 	Metric
 	Collector
@@ -243,6 +244,7 @@ func (v *GaugeVec) With(labels Labels) Gauge {
 // vectors behave identically in terms of collection. Only one must be
 // registered with a given registry (usually the uncurried version). The Reset
 // method deletes all metrics, even if called on a curried vector.
+// 标签聚合
 func (v *GaugeVec) CurryWith(labels Labels) (*GaugeVec, error) {
 	vec, err := v.curryWith(labels)
 	if vec != nil {

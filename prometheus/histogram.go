@@ -41,6 +41,9 @@ import (
 // method of a Summary.
 //
 // To create Histogram instances, use NewHistogram.
+// Histogram 实现了 Observer 接口，用来获取客户端状态初始化（重启）到某个时间点的采样点分布，监控数据常需要服从正态分布。
+// 1.可以理解为柱状图，典型的应用如：请求持续时间，响应大小。
+// 2.可以对观察结果采样，分组及统计。
 type Histogram interface {
 	Metric
 	Collector
@@ -71,6 +74,8 @@ var (
 // used for the Buckets field of HistogramOpts.
 //
 // The function panics if 'count' is zero or negative.
+// 递增bucket：(start, start + width, start + width * 2, ... start + width * count)
+// 线性增长
 func LinearBuckets(start, width float64, count int) []float64 {
 	if count < 1 {
 		panic("LinearBuckets needs a positive count")
@@ -91,6 +96,7 @@ func LinearBuckets(start, width float64, count int) []float64 {
 //
 // The function panics if 'count' is 0 or negative, if 'start' is 0 or negative,
 // or if 'factor' is less than or equal 1.
+// 指数增长模型
 func ExponentialBuckets(start, factor float64, count int) []float64 {
 	if count < 1 {
 		panic("ExponentialBuckets needs a positive count")
@@ -113,6 +119,8 @@ func ExponentialBuckets(start, factor float64, count int) []float64 {
 // mandatory to set Name to a non-empty string. All other fields are optional
 // and can safely be left at their zero value, although it is strongly
 // encouraged to set a Help string.
+
+// HistogramOpts:Histogram参数结构体
 type HistogramOpts struct {
 	// Namespace, Subsystem, and Name are components of the fully-qualified
 	// name of the Histogram (created by joining these components with
@@ -168,17 +176,21 @@ func newHistogram(desc *Desc, opts HistogramOpts, labelValues ...string) Histogr
 		panic(makeInconsistentCardinalityError(desc.fqName, desc.variableLabels, labelValues))
 	}
 
+	// 遍历variableLabels
 	for _, n := range desc.variableLabels {
+		// 不能够有内置的le标签，否则会panic
 		if n == bucketLabel {
 			panic(errBucketLabelNotAllowed)
 		}
 	}
+	// 遍历constLabelPairs
 	for _, lp := range desc.constLabelPairs {
 		if lp.GetName() == bucketLabel {
 			panic(errBucketLabelNotAllowed)
 		}
 	}
 
+	// 没有自定义bucket，则使用默认bucket
 	if len(opts.Buckets) == 0 {
 		opts.Buckets = DefBuckets
 	}
@@ -270,6 +282,9 @@ func (h *histogram) Observe(v float64) {
 	// 11 buckets: 38.3 ns/op linear - binary 48.7 ns/op
 	// 100 buckets: 78.1 ns/op linear - binary 54.9 ns/op
 	// 300 buckets: 154 ns/op linear - binary 61.6 ns/op
+	// 搜索观察数据对应的bucket
+	// 查找大于v的最小值
+	// sort.SearchFloat64s-这个函数有用
 	i := sort.SearchFloat64s(h.upperBounds, v)
 
 	// We increment h.countAndHotIdx so that the counter in the lower
@@ -279,9 +294,12 @@ func (h *histogram) Observe(v float64) {
 	hotCounts := h.counts[n>>63]
 
 	if i < len(h.upperBounds) {
+		// 对应的bucket的计数器+1
+		// 采样
 		atomic.AddUint64(&hotCounts.buckets[i], 1)
 	}
 	for {
+		// 将观测数据累加到sumBits上
 		oldBits := atomic.LoadUint64(&hotCounts.sumBits)
 		newBits := math.Float64bits(math.Float64frombits(oldBits) + v)
 		if atomic.CompareAndSwapUint64(&hotCounts.sumBits, oldBits, newBits) {
@@ -502,6 +520,7 @@ func (h *constHistogram) Write(out *dto.Metric) error {
 	his.SampleCount = proto.Uint64(h.count)
 	his.SampleSum = proto.Float64(h.sum)
 
+	// 上界以及对应出现的次数
 	for upperBound, count := range h.buckets {
 		buckets = append(buckets, &dto.Bucket{
 			CumulativeCount: proto.Uint64(count),

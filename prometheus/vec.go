@@ -63,12 +63,14 @@ func newMetricVec(desc *Desc, newMetric func(lvs ...string) Metric) *metricVec {
 // latter has a much more readable (albeit more verbose) syntax, but it comes
 // with a performance overhead (for creating and processing the Labels map).
 // See also the CounterVec example.
+// 删除标签
 func (m *metricVec) DeleteLabelValues(lvs ...string) bool {
 	h, err := m.hashLabelValues(lvs)
 	if err != nil {
 		return false
 	}
 
+	// 从map中剔除该值
 	return m.metricMap.deleteByHashWithLabelValues(h, lvs, m.curry)
 }
 
@@ -91,6 +93,7 @@ func (m *metricVec) Delete(labels Labels) bool {
 	return m.metricMap.deleteByHashWithLabels(h, labels, m.curry)
 }
 
+// 将标签追加到metricVec的curry里面
 func (m *metricVec) curryWith(labels Labels) (*metricVec, error) {
 	var (
 		newCurry []curriedLabelValue
@@ -101,6 +104,7 @@ func (m *metricVec) curryWith(labels Labels) (*metricVec, error) {
 		val, ok := labels[label]
 		if iCurry < len(oldCurry) && oldCurry[iCurry].index == i {
 			if ok {
+				// 不能重复添加标签
 				return nil, fmt.Errorf("label name %q is already curried", label)
 			}
 			newCurry = append(newCurry, oldCurry[iCurry])
@@ -142,7 +146,10 @@ func (m *metricVec) getMetricWith(labels Labels) (Metric, error) {
 	return m.metricMap.getOrCreateMetricWithLabels(h, labels, m.curry), nil
 }
 
+
+// 计算LabelValue的hash值
 func (m *metricVec) hashLabelValues(vals []string) (uint64, error) {
+	// 检查LabelValue的合法性
 	if err := validateLabelValues(vals, len(m.desc.variableLabels)-len(m.curry)); err != nil {
 		return 0, err
 	}
@@ -211,6 +218,7 @@ type curriedLabelValue struct {
 // metricVecs.
 type metricMap struct {
 	mtx       sync.RWMutex // Protects metrics.
+	// 类似hash桶
 	metrics   map[uint64][]metricWithLabelValues
 	desc      *Desc
 	newMetric func(labelValues ...string) Metric
@@ -253,6 +261,7 @@ func (m *metricMap) deleteByHashWithLabelValues(
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
 
+	// map[uint64][]metricWithLabelValues
 	metrics, ok := m.metrics[h]
 	if !ok {
 		return false
@@ -280,6 +289,7 @@ func (m *metricMap) deleteByHashWithLabels(
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
 
+	// 获取h下标的metrics列表
 	metrics, ok := m.metrics[h]
 	if !ok {
 		return false
@@ -290,8 +300,11 @@ func (m *metricMap) deleteByHashWithLabels(
 	}
 
 	if len(metrics) > 1 {
+		// 把i去掉
+		// 这样写确实合理?
 		m.metrics[h] = append(metrics[:i], metrics[i+1:]...)
 	} else {
+		// 只剩下一个元素，直接删除数组
 		delete(m.metrics, h)
 	}
 	return true
@@ -329,6 +342,7 @@ func (m *metricMap) getOrCreateMetricWithLabelValues(
 func (m *metricMap) getOrCreateMetricWithLabels(
 	hash uint64, labels Labels, curry []curriedLabelValue,
 ) Metric {
+	// 上读锁
 	m.mtx.RLock()
 	metric, ok := m.getMetricWithHashAndLabels(hash, labels, curry)
 	m.mtx.RUnlock()
@@ -336,12 +350,15 @@ func (m *metricMap) getOrCreateMetricWithLabels(
 		return metric
 	}
 
+	// 上互斥锁
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
+	// 二次检查
 	metric, ok = m.getMetricWithHashAndLabels(hash, labels, curry)
 	if !ok {
-		lvs := extractLabelValues(m.desc, labels, curry)
-		metric = m.newMetric(lvs...)
+		lvs := extractLabelValues(m.desc, labels, curry)  // 重新组织标签lvs []string
+		metric = m.newMetric(lvs...)  // 新构造metric
+		// 在对应的hash新增加metricWithLabelValues
 		m.metrics[hash] = append(m.metrics[hash], metricWithLabelValues{values: lvs, metric: metric})
 	}
 	return metric
@@ -366,6 +383,7 @@ func (m *metricMap) getMetricWithHashAndLabelValues(
 func (m *metricMap) getMetricWithHashAndLabels(
 	h uint64, labels Labels, curry []curriedLabelValue,
 ) (Metric, bool) {
+	// 通过hash找到唯一对应的metricWithLabelValues
 	metrics, ok := m.metrics[h]
 	if ok {
 		if i := findMetricWithLabels(m.desc, metrics, labels, curry); i < len(metrics) {
@@ -393,6 +411,7 @@ func findMetricWithLabelValues(
 func findMetricWithLabels(
 	desc *Desc, metrics []metricWithLabelValues, labels Labels, curry []curriedLabelValue,
 ) int {
+	// metricWithLabelValues: []string values, Metric metric
 	for i, metric := range metrics {
 		if matchLabels(desc, metric.values, labels, curry) {
 			return i
@@ -422,11 +441,19 @@ func matchLabelValues(values []string, lvs []string, curry []curriedLabelValue) 
 	return true
 }
 
+// 在labels和curry中查找values第一个匹配的值
+// curriedLabelValue:index int, value string
+// Labels:map[string]string
+
+// 正常情况下：curry某个元素的index如果等于desc.variableLabels的下标，那么该元素的value必须等于desc.variableLabels的值
+// desc.variableLabels某个下标的值作为key，labels[key]的值与values对应该下标的值相等。
 func matchLabels(desc *Desc, values []string, labels Labels, curry []curriedLabelValue) bool {
+	// values的个数必须和labels和curry相加一样多
 	if len(values) != len(labels)+len(curry) {
 		return false
 	}
 	iCurry := 0
+	// variableLabels: []string
 	for i, k := range desc.variableLabels {
 		if iCurry < len(curry) && curry[iCurry].index == i {
 			if values[i] != curry[iCurry].value {

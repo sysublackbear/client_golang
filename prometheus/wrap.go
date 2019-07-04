@@ -32,12 +32,6 @@ import (
 // WrapRegistererWith provides a way to add fixed labels to a subset of
 // Collectors. It should not be used to add fixed labels to all metrics exposed.
 //
-// Conflicts between Collectors registered through the original Registerer with
-// Collectors registered through the wrapping Registerer will still be
-// detected. Any AlreadyRegisteredError returned by the Register method of
-// either Registerer will contain the ExistingCollector in the form it was
-// provided to the respective registry.
-//
 // The Collector example demonstrates a use of WrapRegistererWith.
 func WrapRegistererWith(labels Labels, reg Registerer) Registerer {
 	return &wrappingRegisterer{
@@ -60,12 +54,6 @@ func WrapRegistererWith(labels Labels, reg Registerer) Registerer {
 // (see NewGoCollector) and the process collector (see NewProcessCollector). (In
 // fact, those metrics are already prefixed with “go_” or “process_”,
 // respectively.)
-//
-// Conflicts between Collectors registered through the original Registerer with
-// Collectors registered through the wrapping Registerer will still be
-// detected. Any AlreadyRegisteredError returned by the Register method of
-// either Registerer will contain the ExistingCollector in the form it was
-// provided to the respective registry.
 func WrapRegistererWithPrefix(prefix string, reg Registerer) Registerer {
 	return &wrappingRegisterer{
 		wrappedRegisterer: reg,
@@ -116,6 +104,7 @@ func (c *wrappingCollector) Collect(ch chan<- Metric) {
 		close(wrappedCh)
 	}()
 	for m := range wrappedCh {
+		// 每个metric带上prefix和labels
 		ch <- &wrappingMetric{
 			wrappedMetric: m,
 			prefix:        c.prefix,
@@ -135,15 +124,6 @@ func (c *wrappingCollector) Describe(ch chan<- *Desc) {
 	}
 }
 
-func (c *wrappingCollector) unwrapRecursively() Collector {
-	switch wc := c.wrappedCollector.(type) {
-	case *wrappingCollector:
-		return wc.unwrapRecursively()
-	default:
-		return wc
-	}
-}
-
 type wrappingMetric struct {
 	wrappedMetric Metric
 	prefix        string
@@ -154,6 +134,7 @@ func (m *wrappingMetric) Desc() *Desc {
 	return wrapDesc(m.wrappedMetric.Desc(), m.prefix, m.labels)
 }
 
+// 在wrappedMetric.Write返回的dto.Metric基础上，增加m.labels的数据
 func (m *wrappingMetric) Write(out *dto.Metric) error {
 	if err := m.wrappedMetric.Write(out); err != nil {
 		return err
@@ -172,6 +153,9 @@ func (m *wrappingMetric) Write(out *dto.Metric) error {
 	return nil
 }
 
+// 在普通Desc的基础上,
+// fqName = prefix + fqName
+// constLabel = m.constLables + labels
 func wrapDesc(desc *Desc, prefix string, labels Labels) *Desc {
 	constLabels := Labels{}
 	for _, lp := range desc.constLabelPairs {
@@ -179,6 +163,7 @@ func wrapDesc(desc *Desc, prefix string, labels Labels) *Desc {
 	}
 	for ln, lv := range labels {
 		if _, alreadyUsed := constLabels[ln]; alreadyUsed {
+			// 存在重复的label
 			return &Desc{
 				fqName:          desc.fqName,
 				help:            desc.help,
@@ -198,3 +183,5 @@ func wrapDesc(desc *Desc, prefix string, labels Labels) *Desc {
 	}
 	return newDesc
 }
+
+// finish

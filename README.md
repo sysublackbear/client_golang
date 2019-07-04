@@ -65,7 +65,7 @@ type Metric struct {
 
 
 
-更多细节请看：[Prometheus类图](http://baidu.com)
+更多细节请看：[Prometheus类图](https://github.com/sysublackbear/client_golang/blob/master/prometheus%E7%B1%BB%E5%9B%BE.jpg)
 
 
 

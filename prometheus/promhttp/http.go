@@ -72,7 +72,10 @@ var gzipPool = sync.Pool{
 // Gatherer, different instrumentation, and non-default HandlerOpts), use the
 // HandlerFor function. See there for details.
 func Handler() http.Handler {
+	// 将一个CounterVec（请求总数），Gauge注册到prometheus.DefaultRegisterer中
 	return InstrumentMetricHandler(
+		// prometheus.DefaultRegisterer := NewRegistry()
+		// prometheus.DefaultGatherer := prometheus.DefaultRegisterer
 		prometheus.DefaultRegisterer, HandlerFor(prometheus.DefaultGatherer, HandlerOpts{}),
 	)
 }
@@ -83,32 +86,12 @@ func Handler() http.Handler {
 // Gatherers, with non-default HandlerOpts, and/or with custom (or no)
 // instrumentation. Use the InstrumentMetricHandler function to apply the same
 // kind of instrumentation as it is used by the Handler function.
+// 相当于没请求一次，从对应的Gatherer里面Gather一把把数据采集返回
 func HandlerFor(reg prometheus.Gatherer, opts HandlerOpts) http.Handler {
-	var (
-		inFlightSem chan struct{}
-		errCnt      = prometheus.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: "promhttp_metric_handler_errors_total",
-				Help: "Total number of internal errors encountered by the promhttp metric handler.",
-			},
-			[]string{"cause"},
-		)
-	)
-
+	var inFlightSem chan struct{}
 	if opts.MaxRequestsInFlight > 0 {
+		// 限频
 		inFlightSem = make(chan struct{}, opts.MaxRequestsInFlight)
-	}
-	if opts.Registry != nil {
-		// Initialize all possibilites that can occur below.
-		errCnt.WithLabelValues("gathering")
-		errCnt.WithLabelValues("encoding")
-		if err := opts.Registry.Register(errCnt); err != nil {
-			if are, ok := err.(prometheus.AlreadyRegisteredError); ok {
-				errCnt = are.ExistingCollector.(*prometheus.CounterVec)
-			} else {
-				panic(err)
-			}
-		}
 	}
 
 	h := http.HandlerFunc(func(rsp http.ResponseWriter, req *http.Request) {
@@ -128,7 +111,6 @@ func HandlerFor(reg prometheus.Gatherer, opts HandlerOpts) http.Handler {
 			if opts.ErrorLog != nil {
 				opts.ErrorLog.Println("error gathering metrics:", err)
 			}
-			errCnt.WithLabelValues("gathering").Inc()
 			switch opts.ErrorHandling {
 			case PanicOnError:
 				panic(err)
@@ -148,6 +130,7 @@ func HandlerFor(reg prometheus.Gatherer, opts HandlerOpts) http.Handler {
 		header := rsp.Header()
 		header.Set(contentTypeHeader, string(contentType))
 
+		// gzip连接池
 		w := io.Writer(rsp)
 		if !opts.DisableCompression && gzipAccepted(req.Header) {
 			header.Set(contentEncodingHeader, "gzip")
@@ -169,7 +152,6 @@ func HandlerFor(reg prometheus.Gatherer, opts HandlerOpts) http.Handler {
 				if opts.ErrorLog != nil {
 					opts.ErrorLog.Println("error encoding and sending metric family:", err)
 				}
-				errCnt.WithLabelValues("encoding").Inc()
 				switch opts.ErrorHandling {
 				case PanicOnError:
 					panic(err)
@@ -187,9 +169,11 @@ func HandlerFor(reg prometheus.Gatherer, opts HandlerOpts) http.Handler {
 		}
 	})
 
+	// 如果没有设置超时，直接使用HttpHandler即可，否则，使用支持逻辑超时的TimeoutHandler
 	if opts.Timeout <= 0 {
 		return h
 	}
+	// golang原生支持的逻辑超时的HttpHandler
 	return http.TimeoutHandler(h, opts.Timeout, fmt.Sprintf(
 		"Exceeded configured timeout of %v.\n",
 		opts.Timeout,
@@ -213,17 +197,26 @@ func HandlerFor(reg prometheus.Gatherer, opts HandlerOpts) http.Handler {
 // "scrape_duration_seconds" gauge created by the Prometheus server upon each
 // scrape.
 func InstrumentMetricHandler(reg prometheus.Registerer, handler http.Handler) http.Handler {
+	// 新建CounterVec指标
 	cnt := prometheus.NewCounterVec(
 		prometheus.CounterOpts{
+			// 请求http服务器的请求数
 			Name: "promhttp_metric_handler_requests_total",
 			Help: "Total number of scrapes by HTTP status code.",
 		},
 		[]string{"code"},
 	)
 	// Initialize the most likely HTTP status codes.
+	// 初始化HTTP状态码，不存在则创建
+	// 添加label
 	cnt.WithLabelValues("200")
 	cnt.WithLabelValues("500")
 	cnt.WithLabelValues("503")
+
+	// 注册函数在：registry.go中，
+	// Registry implements Registerer.
+	// func (r *Registry) Register(c Collector) error {
+	// 将CounterVec这个Collector注册到reg里面
 	if err := reg.Register(cnt); err != nil {
 		if are, ok := err.(prometheus.AlreadyRegisteredError); ok {
 			cnt = are.ExistingCollector.(*prometheus.CounterVec)
@@ -233,6 +226,7 @@ func InstrumentMetricHandler(reg prometheus.Registerer, handler http.Handler) ht
 	}
 
 	gge := prometheus.NewGauge(prometheus.GaugeOpts{
+		// 一次周期内的请求总数
 		Name: "promhttp_metric_handler_requests_in_flight",
 		Help: "Current number of scrapes being served.",
 	})
@@ -244,6 +238,7 @@ func InstrumentMetricHandler(reg prometheus.Registerer, handler http.Handler) ht
 		}
 	}
 
+	// wrap两层嵌套
 	return InstrumentHandlerCounter(cnt, InstrumentHandlerInFlight(gge, handler))
 }
 
@@ -260,12 +255,9 @@ const (
 	// Ignore errors and try to serve as many metrics as possible.  However,
 	// if no metrics can be served, serve an HTTP status code 500 and the
 	// last error message in the body. Only use this in deliberate "best
-	// effort" metrics collection scenarios. In this case, it is highly
-	// recommended to provide other means of detecting errors: By setting an
-	// ErrorLog in HandlerOpts, the errors are logged. By providing a
-	// Registry in HandlerOpts, the exposed metrics include an error counter
-	// "promhttp_metric_handler_errors_total", which can be used for
-	// alerts.
+	// effort" metrics collection scenarios. It is recommended to at least
+	// log errors (by providing an ErrorLog in HandlerOpts) to not mask
+	// errors completely.
 	ContinueOnError
 	// Panic upon the first error encountered (useful for "crash only" apps).
 	PanicOnError
@@ -288,18 +280,6 @@ type HandlerOpts struct {
 	// logged regardless of the configured ErrorHandling provided ErrorLog
 	// is not nil.
 	ErrorHandling HandlerErrorHandling
-	// If Registry is not nil, it is used to register a metric
-	// "promhttp_metric_handler_errors_total", partitioned by "cause". A
-	// failed registration causes a panic. Note that this error counter is
-	// different from the instrumentation you get from the various
-	// InstrumentHandler... helpers. It counts errors that don't necessarily
-	// result in a non-2xx HTTP status code. There are two typical cases:
-	// (1) Encoding errors that only happen after streaming of the HTTP body
-	// has already started (and the status code 200 has been sent). This
-	// should only happen with custom collectors. (2) Collection errors with
-	// no effect on the HTTP status code because ErrorHandling is set to
-	// ContinueOnError.
-	Registry prometheus.Registerer
 	// If DisableCompression is true, the handler will never compress the
 	// response, even if requested by the client.
 	DisableCompression bool

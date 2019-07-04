@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Counter:一种累加的metric。典型的应用如：请求的个数，结束的任务数， 出现的错误数等等。
 package prometheus
 
 import (
@@ -30,6 +31,7 @@ import (
 // occurred, etc.
 //
 // To create Counter instances, use NewCounter.
+// 收集事件次数等单调递增的数据
 type Counter interface {
 	Metric
 	Collector
@@ -62,7 +64,7 @@ func NewCounter(opts CounterOpts) Counter {
 		opts.ConstLabels,
 	)
 	result := &counter{desc: desc, labelPairs: desc.constLabelPairs}
-	result.init(result) // Init self-collection.
+	result.init(result) // Init self-collection.  // 调用了selfCollector的init方法
 	return result
 }
 
@@ -90,12 +92,17 @@ func (c *counter) Add(v float64) {
 	}
 	ival := uint64(v)
 	if float64(ival) == v {
+		// 只有整数才会进入这个分支
+		// a := 1.0
+		// b := uint64(a) - 1
+		// c := float64(b) - 1.0
 		atomic.AddUint64(&c.valInt, ival)
 		return
 	}
 
 	for {
-		oldBits := atomic.LoadUint64(&c.valBits)
+		// 无锁实现
+		oldBits := atomic.LoadUint64(&c.valBits)  // 到处当前变量的值
 		newBits := math.Float64bits(math.Float64frombits(oldBits) + v)
 		if atomic.CompareAndSwapUint64(&c.valBits, oldBits, newBits) {
 			return
@@ -120,6 +127,9 @@ func (c *counter) Write(out *dto.Metric) error {
 // if you want to count the same thing partitioned by various dimensions
 // (e.g. number of HTTP requests, partitioned by response code and
 // method). Create instances with NewCounterVec.
+
+// CounterVec: Counter的集合，同样的描述，但是根据各自的标签具有不同的值
+// 适用于根据各种不同维度而创建的计数值
 type CounterVec struct {
 	*metricVec
 }

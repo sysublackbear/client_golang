@@ -36,7 +36,7 @@ type goCollector struct {
 	msMaxAge        time.Duration           // Maximum allowed age of old memstats.
 }
 
-// NewGoCollector returns a collector that exports metrics about the current Go
+// NewGoCollector returns a collector which exports metrics about the current Go
 // process. This includes memory stats. To collect those, runtime.ReadMemStats
 // is called. This requires to “stop the world”, which usually only happens for
 // garbage collection (GC). Take the following implications into account when
@@ -63,15 +63,16 @@ type goCollector struct {
 // issue.)
 func NewGoCollector() Collector {
 	return &goCollector{
+		// 当前存活的goroutine
 		goroutinesDesc: NewDesc(
 			"go_goroutines",
 			"Number of goroutines that currently exist.",
 			nil, nil),
-		threadsDesc: NewDesc(
+		threadsDesc: NewDesc(  // 系统创建的线程个数
 			"go_threads",
 			"Number of OS threads created.",
 			nil, nil),
-		gcDesc: NewDesc(
+		gcDesc: NewDesc(  // gc时间间隔
 			"go_gc_duration_seconds",
 			"A summary of the GC invocation durations.",
 			nil, nil),
@@ -296,6 +297,8 @@ func (c *goCollector) Describe(ch chan<- *Desc) {
 	}
 }
 
+// 正常情况下只做系统runtime的信息上报工作
+// 但也支持mock
 // Collect returns the current state of all metrics of the collector.
 func (c *goCollector) Collect(ch chan<- Metric) {
 	var (
@@ -304,7 +307,7 @@ func (c *goCollector) Collect(ch chan<- Metric) {
 	)
 	// Start reading memstats first as it might take a while.
 	go func() {
-		c.msRead(ms)
+		c.msRead(ms)   // msRead仅做mock测试
 		c.msMtx.Lock()
 		c.msLast = ms
 		c.msLastTimestamp = time.Now()
@@ -312,8 +315,11 @@ func (c *goCollector) Collect(ch chan<- Metric) {
 		close(done)
 	}()
 
+	// goroutinesDesc作为Gauge写入
 	ch <- MustNewConstMetric(c.goroutinesDesc, GaugeValue, float64(runtime.NumGoroutine()))
+	// 返回 n，线程创建配置文件中的记录数。
 	n, _ := runtime.ThreadCreateProfile(nil)
+	// 线程数做为Gauge写入
 	ch <- MustNewConstMetric(c.threadsDesc, GaugeValue, float64(n))
 
 	var stats debug.GCStats
@@ -325,12 +331,14 @@ func (c *goCollector) Collect(ch chan<- Metric) {
 		quantiles[float64(idx+1)/float64(len(stats.PauseQuantiles)-1)] = pq.Seconds()
 	}
 	quantiles[0.0] = stats.PauseQuantiles[0].Seconds()
+	// GC次数分布写入
 	ch <- MustNewConstSummary(c.gcDesc, uint64(stats.NumGC), stats.PauseTotal.Seconds(), quantiles)
 
 	ch <- MustNewConstMetric(c.goInfoDesc, GaugeValue, 1)
 
 	timer := time.NewTimer(c.msMaxWait)
 	select {
+	// 信息收集已经完成
 	case <-done: // Our own ReadMemStats succeeded in time. Use it.
 		timer.Stop() // Important for high collection frequencies to not pile up timers.
 		c.msCollect(ch, ms)
@@ -365,32 +373,4 @@ type memStatsMetrics []struct {
 	valType ValueType
 }
 
-// NewBuildInfoCollector returns a collector collecting a single metric
-// "go_build_info" with the constant value 1 and three labels "path", "version",
-// and "checksum". Their label values contain the main module path, version, and
-// checksum, respectively. The labels will only have meaningful values if the
-// binary is built with Go module support and from source code retrieved from
-// the source repository (rather than the local file system). This is usually
-// accomplished by building from outside of GOPATH, specifying the full address
-// of the main package, e.g. "GO111MODULE=on go run
-// github.com/prometheus/client_golang/examples/random". If built without Go
-// module support, all label values will be "unknown". If built with Go module
-// support but using the source code from the local file system, the "path" will
-// be set appropriately, but "checksum" will be empty and "version" will be
-// "(devel)".
-//
-// This collector uses only the build information for the main module. See
-// https://github.com/povilasv/prommod for an example of a collector for the
-// module dependencies.
-func NewBuildInfoCollector() Collector {
-	path, version, sum := readBuildInfo()
-	c := &selfCollector{MustNewConstMetric(
-		NewDesc(
-			"go_build_info",
-			"Build information about the main Go module.",
-			nil, Labels{"path": path, "version": version, "checksum": sum},
-		),
-		GaugeValue, 1)}
-	c.init(c.self)
-	return c
-}
+// finish

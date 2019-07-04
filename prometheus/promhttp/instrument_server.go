@@ -67,6 +67,7 @@ func InstrumentHandlerDuration(obs prometheus.ObserverVec, next http.Handler) ht
 			d := newDelegator(w, nil)
 			next.ServeHTTP(d, r)
 
+			// 真正上报的逻辑
 			obs.With(labels(code, method, r.Method, d.Status())).Observe(time.Since(now).Seconds())
 		})
 	}
@@ -91,14 +92,15 @@ func InstrumentHandlerDuration(obs prometheus.ObserverVec, next http.Handler) ht
 // If the wrapped Handler panics, the Counter is not incremented.
 //
 // See the example for InstrumentHandlerDuration for example usage.
+// InstrumentHandlerCounter(cnt, InstrumentHandlerInFlight(gge, handler))
 func InstrumentHandlerCounter(counter *prometheus.CounterVec, next http.Handler) http.HandlerFunc {
-	code, method := checkLabels(counter)
+	code, method := checkLabels(counter)  // 检查counter里面是否具有code和method指标，找不到会panic
 
 	if code {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			d := newDelegator(w, nil)
 			next.ServeHTTP(d, r)
-			counter.With(labels(code, method, r.Method, d.Status())).Inc()
+			counter.With(labels(code, method, r.Method, d.Status())).Inc()  // 请求次数累加1
 		})
 	}
 
@@ -210,7 +212,7 @@ func checkLabels(c prometheus.Collector) (code bool, method bool) {
 
 	// Get the Desc from the Collector.
 	descc := make(chan *prometheus.Desc, 1)
-	c.Describe(descc)
+	c.Describe(descc)  // 将Metric写入到descc
 
 	select {
 	case desc = <-descc:

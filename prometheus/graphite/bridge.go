@@ -13,6 +13,9 @@
 
 // Package graphite provides a bridge to push Prometheus metrics to a Graphite
 // server.
+
+// 关于更多graphite的信息，可以看：https://my.oschina.net/u/1263964/blog/701664
+// 该示例实现了graphite和prometheus之间的桥梁，给graphite喂数据
 package graphite
 
 import (
@@ -55,6 +58,7 @@ const (
 // Config defines the Graphite bridge config.
 type Config struct {
 	// The url to push data to. Required.
+	// 推送数据的URL
 	URL string
 
 	// The prefix for the pushed Graphite metrics. Defaults to empty string.
@@ -110,6 +114,7 @@ func NewBridge(c *Config) (*Bridge, error) {
 	if c.Gatherer == nil {
 		b.g = prometheus.DefaultGatherer
 	} else {
+		// 支持自定义Gatherer收集器
 		b.g = c.Gatherer
 	}
 
@@ -142,11 +147,12 @@ func NewBridge(c *Config) (*Bridge, error) {
 // Run starts the event loop that pushes Prometheus metrics to Graphite at the
 // configured interval.
 func (b *Bridge) Run(ctx context.Context) {
-	ticker := time.NewTicker(b.interval)
+	ticker := time.NewTicker(b.interval)  // 定时器
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
+			// 每隔b.interval推送数据
 			if err := b.Push(); err != nil && b.logger != nil {
 				b.logger.Println("error pushing to Graphite:", err)
 			}
@@ -158,7 +164,7 @@ func (b *Bridge) Run(ctx context.Context) {
 
 // Push pushes Prometheus metrics to the configured Graphite server.
 func (b *Bridge) Push() error {
-	mfs, err := b.g.Gather()
+	mfs, err := b.g.Gather()  // 得到dto.MetricFamily{}
 	if err != nil || len(mfs) == 0 {
 		switch b.errorHandling {
 		case AbortOnError:
@@ -182,13 +188,14 @@ func (b *Bridge) Push() error {
 }
 
 func writeMetrics(w io.Writer, mfs []*dto.MetricFamily, prefix string, now model.Time) error {
-	vec, err := expfmt.ExtractSamples(&expfmt.DecodeOptions{
+	vec, err := expfmt.ExtractSamples(&expfmt.DecodeOptions{  // 编码操作
 		Timestamp: now,
 	}, mfs...)
 	if err != nil {
 		return err
 	}
 
+	// 把收集的数据指标格式化成“metric_path value timestamp\n“格式的字符串
 	buf := bufio.NewWriter(w)
 	for _, s := range vec {
 		for _, c := range prefix {

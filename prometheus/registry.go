@@ -57,7 +57,9 @@ var (
 )
 
 func init() {
+	// 默认初始化进程采集器
 	MustRegister(NewProcessCollector(ProcessCollectorOpts{}))
+	// 默认信息采集器
 	MustRegister(NewGoCollector())
 }
 
@@ -260,7 +262,7 @@ type Registry struct {
 	pedanticChecksEnabled bool
 }
 
-// Register implements Registerer.
+// Registry implements Registerer.
 func (r *Registry) Register(c Collector) error {
 	var (
 		descChan           = make(chan *Desc, capDescChan)
@@ -270,13 +272,13 @@ func (r *Registry) Register(c Collector) error {
 		duplicateDescErr   error
 	)
 	go func() {
-		c.Describe(descChan)
+		c.Describe(descChan)  // c的desc写入descChan
 		close(descChan)
 	}()
 	r.mtx.Lock()
 	defer func() {
 		// Drain channel in case of premature return to not leak a goroutine.
-		for range descChan {
+		for range descChan {  // 清空channel然后关闭
 		}
 		r.mtx.Unlock()
 	}()
@@ -298,7 +300,7 @@ func (r *Registry) Register(c Collector) error {
 		// collector, but their existence must be a no-op.)
 		if _, exists := newDescIDs[desc.id]; !exists {
 			newDescIDs[desc.id] = struct{}{}
-			collectorID += desc.id
+			collectorID += desc.id  // 对desc.id求和
 		}
 
 		// Are all the label names and the help string consistent with
@@ -315,7 +317,7 @@ func (r *Registry) Register(c Collector) error {
 					return fmt.Errorf("descriptors reported by collector have inconsistent label names or help strings for the same fully-qualified name, offender is %s", desc)
 				}
 			} else {
-				newDimHashesByName[desc.fqName] = desc.dimHash
+				newDimHashesByName[desc.fqName] = desc.dimHash  // 记录fqName和dimHash的映射关系
 			}
 		}
 	}
@@ -325,17 +327,9 @@ func (r *Registry) Register(c Collector) error {
 		return nil
 	}
 	if existing, exists := r.collectorsByID[collectorID]; exists {
-		switch e := existing.(type) {
-		case *wrappingCollector:
-			return AlreadyRegisteredError{
-				ExistingCollector: e.unwrapRecursively(),
-				NewCollector:      c,
-			}
-		default:
-			return AlreadyRegisteredError{
-				ExistingCollector: e,
-				NewCollector:      c,
-			}
+		return AlreadyRegisteredError{
+			ExistingCollector: existing,
+			NewCollector:      c,
 		}
 	}
 	// If the collectorID is new, but at least one of the descs existed
@@ -345,6 +339,7 @@ func (r *Registry) Register(c Collector) error {
 	}
 
 	// Only after all tests have passed, actually register.
+	// 真正注册
 	r.collectorsByID[collectorID] = c
 	for hash := range newDescIDs {
 		r.descIDs[hash] = struct{}{}
@@ -413,6 +408,7 @@ func (r *Registry) Gather() ([]*dto.MetricFamily, error) {
 	)
 
 	r.mtx.RLock()
+	// goroutine
 	goroutineBudget := len(r.collectorsByID) + len(r.uncheckedCollectors)
 	metricFamiliesByName := make(map[string]*dto.MetricFamily, len(r.dimHashesByName))
 	checkedCollectors := make(chan Collector, len(r.collectorsByID))
@@ -435,8 +431,10 @@ func (r *Registry) Gather() ([]*dto.MetricFamily, error) {
 
 	wg.Add(goroutineBudget)
 
+	// 收集数据
 	collectWorker := func() {
 		for {
+			// 一直在采集数据
 			select {
 			case collector := <-checkedCollectors:
 				collector.Collect(checkedMetricChan)
@@ -450,6 +448,7 @@ func (r *Registry) Gather() ([]*dto.MetricFamily, error) {
 	}
 
 	// Start the first worker now to make sure at least one is running.
+	// 保证有一个正在运行
 	go collectWorker()
 	goroutineBudget--
 
@@ -457,6 +456,7 @@ func (r *Registry) Gather() ([]*dto.MetricFamily, error) {
 	// are collected.
 	go func() {
 		wg.Wait()
+		// 一旦所有的协程都执行wg.Done()，说明所有的collector已经执行完毕，关闭管道
 		close(checkedMetricChan)
 		close(uncheckedMetricChan)
 	}()
@@ -480,7 +480,7 @@ func (r *Registry) Gather() ([]*dto.MetricFamily, error) {
 
 	for {
 		select {
-		case metric, ok := <-cmc:
+		case metric, ok := <-cmc:  // 数据来自collector.Collect(checkedMetricChan)
 			if !ok {
 				cmc = nil
 				break
@@ -512,6 +512,7 @@ func (r *Registry) Gather() ([]*dto.MetricFamily, error) {
 						cmc = nil
 						break
 					}
+					// err不为nil才会Append
 					errs.Append(processMetric(
 						metric, metricFamiliesByName,
 						metricHashes,
@@ -528,6 +529,7 @@ func (r *Registry) Gather() ([]*dto.MetricFamily, error) {
 						nil,
 					))
 				}
+				// 全部goroutine已经开启，退出循环
 				break
 			}
 			// Start more workers.
@@ -542,6 +544,7 @@ func (r *Registry) Gather() ([]*dto.MetricFamily, error) {
 			break
 		}
 	}
+	// 将map[string]*dto.MetricFamily按照key进行排序，塞到[]*dto.MetricFamily中
 	return internal.NormalizeMetricFamilies(metricFamiliesByName), errs.MaybeUnwrap()
 }
 
@@ -563,6 +566,7 @@ func WriteToTextfile(filename string, g Gatherer) error {
 		return err
 	}
 	for _, mf := range mfs {
+		// dto.MetricFamily写入到文本文件中
 		if _, err := expfmt.MetricFamilyToText(tmp, mf); err != nil {
 			return err
 		}
@@ -590,12 +594,15 @@ func processMetric(
 	if desc.err != nil {
 		return desc.err
 	}
+	// 将Metric写入到dto.Metric
 	dtoMetric := &dto.Metric{}
 	if err := metric.Write(dtoMetric); err != nil {
 		return fmt.Errorf("error collecting metric %v: %s", desc, err)
 	}
 	metricFamily, ok := metricFamiliesByName[desc.fqName]
 	if ok { // Existing name.
+		// 已经存在fqName
+		// 核对参数是否一致
 		if metricFamily.GetHelp() != desc.help {
 			return fmt.Errorf(
 				"collected metric %s %s has help %q but should have %q",
@@ -666,6 +673,7 @@ func processMetric(
 		}
 		metricFamiliesByName[desc.fqName] = metricFamily
 	}
+	// 完整性校验
 	if err := checkMetricConsistency(metricFamily, dtoMetric, metricHashes); err != nil {
 		return err
 	}
@@ -704,6 +712,7 @@ func processMetric(
 type Gatherers []Gatherer
 
 // Gather implements Gatherer.
+// 将多个Gatherer的输出的多个dto.MetricFamily聚合到一个dto.MetricFamily
 func (gs Gatherers) Gather() ([]*dto.MetricFamily, error) {
 	var (
 		metricFamiliesByName = map[string]*dto.MetricFamily{}
@@ -943,3 +952,5 @@ func checkDescConsistency(
 	}
 	return nil
 }
+
+// finish

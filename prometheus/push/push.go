@@ -117,14 +117,14 @@ func New(url, job string) *Pusher {
 // Push returns the first error encountered by any method call (including this
 // one) in the lifetime of the Pusher.
 func (p *Pusher) Push() error {
-	return p.push(http.MethodPut)
+	return p.push("PUT")
 }
 
 // Add works like push, but only previously pushed metrics with the same name
 // (and the same job and other grouping labels) will be replaced. (It uses HTTP
 // method “POST” to push to the Pushgateway.)
 func (p *Pusher) Add() error {
-	return p.push(http.MethodPost)
+	return p.push("POST")
 }
 
 // Gatherer adds a Gatherer to the Pusher, from which metrics will be gathered
@@ -144,6 +144,7 @@ func (p *Pusher) Gatherer(g prometheus.Gatherer) *Pusher {
 // For convenience, this method returns a pointer to the Pusher itself.
 func (p *Pusher) Collector(c prometheus.Collector) *Pusher {
 	if p.error == nil {
+		// 注册新的collector
 		p.error = p.registerer.Register(c)
 	}
 	return p
@@ -158,6 +159,7 @@ func (p *Pusher) Collector(c prometheus.Collector) *Pusher {
 //
 // Note that until https://github.com/prometheus/pushgateway/issues/97 is
 // resolved, this method does not allow a “/” character in the label value.
+// 拼接url有用
 func (p *Pusher) Grouping(name, value string) *Pusher {
 	if p.error == nil {
 		if !model.LabelName(name).IsValid() {
@@ -204,42 +206,6 @@ func (p *Pusher) Format(format expfmt.Format) *Pusher {
 	return p
 }
 
-// Delete sends a “DELETE” request to the Pushgateway configured while creating
-// this Pusher, using the configured job name and any added grouping labels as
-// grouping key. Any added Gatherers and Collectors added to this Pusher are
-// ignored by this method.
-//
-// Delete returns the first error encountered by any method call (including this
-// one) in the lifetime of the Pusher.
-func (p *Pusher) Delete() error {
-	if p.error != nil {
-		return p.error
-	}
-	urlComponents := []string{url.QueryEscape(p.job)}
-	for ln, lv := range p.grouping {
-		urlComponents = append(urlComponents, ln, lv)
-	}
-	deleteURL := fmt.Sprintf("%s/metrics/job/%s", p.url, strings.Join(urlComponents, "/"))
-
-	req, err := http.NewRequest(http.MethodDelete, deleteURL, nil)
-	if err != nil {
-		return err
-	}
-	if p.useBasicAuth {
-		req.SetBasicAuth(p.username, p.password)
-	}
-	resp, err := p.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 202 {
-		body, _ := ioutil.ReadAll(resp.Body) // Ignore any further error as this is for an error message only.
-		return fmt.Errorf("unexpected status code %d while deleting %s: %s", resp.StatusCode, deleteURL, body)
-	}
-	return nil
-}
-
 func (p *Pusher) push(method string) error {
 	if p.error != nil {
 		return p.error
@@ -248,8 +214,10 @@ func (p *Pusher) push(method string) error {
 	for ln, lv := range p.grouping {
 		urlComponents = append(urlComponents, ln, lv)
 	}
+	// 计算推送数据url
 	pushURL := fmt.Sprintf("%s/metrics/job/%s", p.url, strings.Join(urlComponents, "/"))
 
+	// 收集数据（metricFamily）
 	mfs, err := p.gatherers.Gather()
 	if err != nil {
 		return err
@@ -271,8 +239,9 @@ func (p *Pusher) push(method string) error {
 				}
 			}
 		}
-		enc.Encode(mf)
+		enc.Encode(mf)  // 对每个MetricFamily编码，写到buffer里面
 	}
+	// 发起http方法调用
 	req, err := http.NewRequest(method, pushURL, buf)
 	if err != nil {
 		return err
@@ -292,3 +261,5 @@ func (p *Pusher) push(method string) error {
 	}
 	return nil
 }
+
+// finish

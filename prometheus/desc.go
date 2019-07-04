@@ -41,6 +41,7 @@ import (
 // values of their constLabels are considered equal.
 //
 // Use NewDesc to create new Desc instances.
+// 描述每个metrics的通用结构
 type Desc struct {
 	// fqName has been built from Namespace, Subsystem, and Name.
 	fqName string
@@ -74,12 +75,14 @@ type Desc struct {
 //
 // For constLabels, the label values are constant. Therefore, they are fully
 // specified in the Desc. See the Collector example for a usage pattern.
+// Desc的构造函数
 func NewDesc(fqName, help string, variableLabels []string, constLabels Labels) *Desc {
 	d := &Desc{
 		fqName:         fqName,
 		help:           help,
 		variableLabels: variableLabels,
 	}
+	// 检查fqName是否合法:由大，小写字母，数字，下划线或者冒号组成
 	if !model.IsValidMetricName(model.LabelValue(fqName)) {
 		d.err = fmt.Errorf("%q is not a valid metric name", fqName)
 		return d
@@ -91,7 +94,10 @@ func NewDesc(fqName, help string, variableLabels []string, constLabels Labels) *
 	labelNames := make([]string, 0, len(constLabels)+len(variableLabels))
 	labelNameSet := map[string]struct{}{}
 	// First add only the const label names and sort them...
+	// 检查constLabels中的labelName是否合法
+	// Labels就是map[string]string
 	for labelName := range constLabels {
+		// 检查constLabels的key-labelName
 		if !checkLabelName(labelName) {
 			d.err = fmt.Errorf("%q is not a valid label name for metric %q", labelName, fqName)
 			return d
@@ -99,13 +105,17 @@ func NewDesc(fqName, help string, variableLabels []string, constLabels Labels) *
 		labelNames = append(labelNames, labelName)
 		labelNameSet[labelName] = struct{}{}
 	}
+	// 排序
 	sort.Strings(labelNames)
 	// ... so that we can now add const label values in the order of their names.
 	for _, labelName := range labelNames {
+		// 将constLabels的value加入到labelValues中
 		labelValues = append(labelValues, constLabels[labelName])
 	}
 	// Validate the const label values. They can't have a wrong cardinality, so
 	// use in len(labelValues) as expectedNumberOfValues.
+	// 检查values的长度
+	// 检查value的值是否合法(utf8)
 	if err := validateLabelValues(labelValues, len(labelValues)); err != nil {
 		d.err = err
 		return d
@@ -113,7 +123,9 @@ func NewDesc(fqName, help string, variableLabels []string, constLabels Labels) *
 	// Now add the variable label names, but prefix them with something that
 	// cannot be in a regular label name. That prevents matching the label
 	// dimension with a different mix between preset and variable labels.
+	// variableLabels []string
 	for _, labelName := range variableLabels {
+		// 检查label名字
 		if !checkLabelName(labelName) {
 			d.err = fmt.Errorf("%q is not a valid label name for metric %q", labelName, fqName)
 			return d
@@ -126,7 +138,9 @@ func NewDesc(fqName, help string, variableLabels []string, constLabels Labels) *
 		return d
 	}
 
+	// 将label进行哈希运算，求出id和dimHash
 	vh := hashNew()
+	// labelValues = append(labelValues, constLabels[labelName])
 	for _, val := range labelValues {
 		vh = hashAdd(vh, val)
 		vh = hashAddByte(vh, separatorByte)

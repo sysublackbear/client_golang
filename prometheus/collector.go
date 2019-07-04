@@ -46,6 +46,8 @@ type Collector interface {
 	// If a Collector encounters an error while executing this method, it
 	// must send an invalid descriptor (created with NewInvalidDesc) to
 	// signal the error to the registry.
+	// Describe暴露全部可能的Metric描述列表，在注册或注销Collector会调用Describe来获取完整的Metric列表
+	// 用以检测Metric定义的冲突
 	Describe(chan<- *Desc)
 	// Collect is called by the Prometheus registry when collecting
 	// metrics. The implementation sends each collected metric via the
@@ -59,6 +61,7 @@ type Collector interface {
 	// implemented in a concurrency safe way. Blocking occurs at the expense
 	// of total performance of rendering all registered metrics. Ideally,
 	// Collector implementations support concurrent readers.
+	// Collect可以获取采样数据，然后通过HTTP接口暴露给Prom Server.
 	Collect(chan<- Metric)
 }
 
@@ -84,14 +87,15 @@ type Collector interface {
 // implementation of Describe if you are certain to fulfill the contract.
 //
 // The Collector example demonstrates a use of DescribeByCollect.
+// Describe接口的简单实现
 func DescribeByCollect(c Collector, descs chan<- *Desc) {
 	metrics := make(chan Metric)
 	go func() {
-		c.Collect(metrics)
+		c.Collect(metrics)  // 收集数据
 		close(metrics)
 	}()
 	for m := range metrics {
-		descs <- m.Desc()
+		descs <- m.Desc()  // 写入到descs
 	}
 }
 

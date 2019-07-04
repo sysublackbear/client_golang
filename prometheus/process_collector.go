@@ -16,6 +16,8 @@ package prometheus
 import (
 	"errors"
 	"os"
+
+	"github.com/prometheus/procfs"
 )
 
 type processCollector struct {
@@ -57,9 +59,21 @@ type ProcessCollectorOpts struct {
 // collector for the current process with an empty namespace string and no error
 // reporting.
 //
-// The collector only works on operating systems with a Linux-style proc
-// filesystem and on Microsoft Windows. On other operating systems, it will not
-// collect any metrics.
+// Currently, the collector depends on a Linux-style proc filesystem and
+// therefore only exports metrics for Linux.
+//
+// Note: An older version of this function had the following signature:
+//
+//     NewProcessCollector(pid int, namespace string) Collector
+//
+// Most commonly, it was called as
+//
+//     NewProcessCollector(os.Getpid(), "")
+//
+// The following call of the current version is equivalent to the above:
+//
+//     NewProcessCollector(ProcessCollectorOpts{})
+// 初始化进程指标采集器
 func NewProcessCollector(opts ProcessCollectorOpts) Collector {
 	ns := ""
 	if len(opts.Namespace) > 0 {
@@ -69,38 +83,38 @@ func NewProcessCollector(opts ProcessCollectorOpts) Collector {
 	c := &processCollector{
 		reportErrors: opts.ReportErrors,
 		cpuTotal: NewDesc(
-			ns+"process_cpu_seconds_total",
+			ns+"process_cpu_seconds_total",   // CPU时间开销
 			"Total user and system CPU time spent in seconds.",
 			nil, nil,
 		),
 		openFDs: NewDesc(
-			ns+"process_open_fds",
+			ns+"process_open_fds",  // 进程打开的fd个数
 			"Number of open file descriptors.",
 			nil, nil,
 		),
 		maxFDs: NewDesc(
-			ns+"process_max_fds",
+			ns+"process_max_fds",  // 打开的fd最大个数限制
 			"Maximum number of open file descriptors.",
 			nil, nil,
 		),
 		vsize: NewDesc(
 			ns+"process_virtual_memory_bytes",
-			"Virtual memory size in bytes.",
+			"Virtual memory size in bytes.",   // 虚拟内存大小
 			nil, nil,
 		),
 		maxVsize: NewDesc(
 			ns+"process_virtual_memory_max_bytes",
-			"Maximum amount of virtual memory available in bytes.",
+			"Maximum amount of virtual memory available in bytes.",  // 可用虚拟内存的最大值
 			nil, nil,
 		),
 		rss: NewDesc(
 			ns+"process_resident_memory_bytes",
-			"Resident memory size in bytes.",
+			"Resident memory size in bytes.",   // 常驻内存大小
 			nil, nil,
 		),
 		startTime: NewDesc(
 			ns+"process_start_time_seconds",
-			"Start time of the process since unix epoch in seconds.",
+			"Start time of the process since unix epoch in seconds.",  // 进程启动时间
 			nil, nil,
 		),
 	}
@@ -113,7 +127,8 @@ func NewProcessCollector(opts ProcessCollectorOpts) Collector {
 	}
 
 	// Set up process metric collection if supported by the runtime.
-	if canCollectProcess() {
+	// 初始化指标收集的方法
+	if _, err := procfs.NewDefaultFS(); err == nil {
 		c.collectFn = c.processCollect
 	} else {
 		c.collectFn = func(ch chan<- Metric) {
@@ -140,6 +155,47 @@ func (c *processCollector) Collect(ch chan<- Metric) {
 	c.collectFn(ch)
 }
 
+// 默认的collect处理函数
+func (c *processCollector) processCollect(ch chan<- Metric) {
+	pid, err := c.pidFn()
+	if err != nil {
+		c.reportError(ch, nil, err)
+		return
+	}
+
+	p, err := procfs.NewProc(pid)
+	if err != nil {
+		c.reportError(ch, nil, err)
+		return
+	}
+
+	if stat, err := p.Stat(); err == nil {
+		ch <- MustNewConstMetric(c.cpuTotal, CounterValue, stat.CPUTime())
+		ch <- MustNewConstMetric(c.vsize, GaugeValue, float64(stat.VirtualMemory()))
+		ch <- MustNewConstMetric(c.rss, GaugeValue, float64(stat.ResidentMemory()))
+		if startTime, err := stat.StartTime(); err == nil {
+			ch <- MustNewConstMetric(c.startTime, GaugeValue, startTime)
+		} else {
+			c.reportError(ch, c.startTime, err)
+		}
+	} else {
+		c.reportError(ch, nil, err)
+	}
+
+	if fds, err := p.FileDescriptorsLen(); err == nil {
+		ch <- MustNewConstMetric(c.openFDs, GaugeValue, float64(fds))
+	} else {
+		c.reportError(ch, c.openFDs, err)
+	}
+
+	if limits, err := p.Limits(); err == nil {
+		ch <- MustNewConstMetric(c.maxFDs, GaugeValue, float64(limits.OpenFiles))
+		ch <- MustNewConstMetric(c.maxVsize, GaugeValue, float64(limits.AddressSpace))
+	} else {
+		c.reportError(ch, nil, err)
+	}
+}
+
 func (c *processCollector) reportError(ch chan<- Metric, desc *Desc, err error) {
 	if !c.reportErrors {
 		return
@@ -149,3 +205,5 @@ func (c *processCollector) reportError(ch chan<- Metric, desc *Desc, err error) 
 	}
 	ch <- NewInvalidMetric(desc, err)
 }
+
+// finish

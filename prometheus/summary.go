@@ -58,8 +58,16 @@ type Summary interface {
 	Observe(float64)
 }
 
-var errQuantileLabelNotAllowed = fmt.Errorf(
-	"%q is not allowed as label name in summaries", quantileLabel,
+// DefObjectives are the default Summary quantile values.
+//
+// Deprecated: DefObjectives will not be used as the default objectives in
+// v1.0.0 of the library. The default Summary will have no quantiles then.
+var (
+	DefObjectives = map[float64]float64{0.5: 0.05, 0.9: 0.01, 0.99: 0.001}
+
+	errQuantileLabelNotAllowed = fmt.Errorf(
+		"%q is not allowed as label name in summaries", quantileLabel,
+	)
 )
 
 // Default values for SummaryOpts.
@@ -115,8 +123,14 @@ type SummaryOpts struct {
 	// Objectives defines the quantile rank estimates with their respective
 	// absolute error. If Objectives[q] = e, then the value reported for q
 	// will be the φ-quantile value for some φ between q-e and q+e.  The
-	// default value is an empty map, resulting in a summary without
-	// quantiles.
+	// default value is DefObjectives. It is used if Objectives is left at
+	// its zero value (i.e. nil). To create a Summary without Objectives,
+	// set it to an empty map (i.e. map[float64]float64{}).
+	//
+	// Note that the current value of DefObjectives is deprecated. It will
+	// be replaced by an empty map in v1.0.0 of the library. Please
+	// explicitly set Objectives to the desired value to avoid problems
+	// during the transition.
 	Objectives map[float64]float64
 
 	// MaxAge defines the duration for which an observation stays relevant
@@ -185,7 +199,7 @@ func newSummary(desc *Desc, opts SummaryOpts, labelValues ...string) Summary {
 	}
 
 	if opts.Objectives == nil {
-		opts.Objectives = map[float64]float64{}
+		opts.Objectives = DefObjectives
 	}
 
 	if opts.MaxAge < 0 {
@@ -252,7 +266,9 @@ type summary struct {
 
 	desc *Desc
 
+	// quantile和可接受的误差
 	objectives       map[float64]float64
+	// 顺序排列的quntile，如：[.5, .75, .9, .95, .99]
 	sortedObjectives []float64
 
 	labelPairs []*dto.LabelPair
@@ -260,12 +276,20 @@ type summary struct {
 	sum float64
 	cnt uint64
 
+	// hotBuf: 接收数据的缓存
+	// coldBuf: 每次收集并计算summary结果的缓存
 	hotBuf, coldBuf []float64
 
+	// 计算quntile的环形队列
 	streams                          []*quantile.Stream
+	// 每个stream单元的生存时间
 	streamDuration                   time.Duration
+	// 当前正在使用的stream
 	headStream                       *quantile.Stream
+	// 当前正在使用的stream在环形队列里面的绝对位置
 	headStreamIdx                    int
+	// headStreamExpTime:当前正在使用的stream失效时间
+	// hotBufExpTime: 将hotBuf的数据转交给coldBuf处理的最大时间。
 	headStreamExpTime, hotBufExpTime time.Time
 }
 
@@ -274,15 +298,20 @@ func (s *summary) Desc() *Desc {
 }
 
 func (s *summary) Observe(v float64) {
-	s.bufMtx.Lock()
+	s.bufMtx.Lock()  // 加互斥锁
 	defer s.bufMtx.Unlock()
 
 	now := time.Now()
+	// 如果hotBuf过期了
 	if now.After(s.hotBufExpTime) {
+		// 清空hotBuf并汇总计算hotBuf中的采样数据
 		s.asyncFlush(now)
 	}
+	// 将采样点append到hotBuf末尾
 	s.hotBuf = append(s.hotBuf, v)
+	// 如果hotBuf满了
 	if len(s.hotBuf) == cap(s.hotBuf) {
+		// 也要清空hotBuf并汇总计算hotBuf中的采样数据
 		s.asyncFlush(now)
 	}
 }
@@ -294,13 +323,17 @@ func (s *summary) Write(out *dto.Metric) error {
 	s.bufMtx.Lock()
 	s.mtx.Lock()
 	// Swap bufs even if hotBuf is empty to set new hotBufExpTime.
+
+	// 收集数据前，先强行swap，因为初始化时coldBuf里面可能还没有数据
 	s.swapBufs(time.Now())
 	s.bufMtx.Unlock()
 
+	// 汇总并清空coldBuf，这时coldBuf的数据已经转化为headStream中的quantile模型
 	s.flushColdBuf()
 	sum.SampleCount = proto.Uint64(s.cnt)
 	sum.SampleSum = proto.Float64(s.sum)
 
+	// 此处sortedObjectives其实就是quantile排序后的结果
 	for _, rank := range s.sortedObjectives {
 		var q float64
 		if s.headStream.Count() == 0 {
@@ -308,6 +341,7 @@ func (s *summary) Write(out *dto.Metric) error {
 		} else {
 			q = s.headStream.Query(rank)
 		}
+		// 将quantile对象append到metrics对象上
 		qs = append(qs, &dto.Quantile{
 			Quantile: proto.Float64(rank),
 			Value:    proto.Float64(q),
@@ -333,20 +367,22 @@ func (s *summary) newStream() *quantile.Stream {
 // asyncFlush needs bufMtx locked.
 func (s *summary) asyncFlush(now time.Time) {
 	s.mtx.Lock()
-	s.swapBufs(now)
+	s.swapBufs(now)  // hotBuf和coldBuf交换
 
 	// Unblock the original goroutine that was responsible for the mutation
 	// that triggered the compaction.  But hold onto the global non-buffer
 	// state mutex until the operation finishes.
 	go func() {
-		s.flushColdBuf()
+		s.flushColdBuf()  // 清空并汇总coldBuf
 		s.mtx.Unlock()
 	}()
 }
 
 // rotateStreams needs mtx AND bufMtx locked.
 func (s *summary) maybeRotateStreams() {
+	// 当前流在coldBuf还未失效
 	for !s.hotBufExpTime.Equal(s.headStreamExpTime) {
+		// 重置环形队列
 		s.headStream.Reset()
 		s.headStreamIdx++
 		if s.headStreamIdx >= len(s.streams) {
@@ -359,6 +395,9 @@ func (s *summary) maybeRotateStreams() {
 
 // flushColdBuf needs mtx locked.
 func (s *summary) flushColdBuf() {
+	// 遍历coldBuf里面的每个采样数据，将之insert道Quantile stream中
+	// 其中Quantile stream封装了快速计算序列的quantile算法
+	// 然后顺便更新当前summary整体的count和sum
 	for _, v := range s.coldBuf {
 		for _, stream := range s.streams {
 			stream.Insert(v)
@@ -366,6 +405,9 @@ func (s *summary) flushColdBuf() {
 		s.cnt++
 		s.sum += v
 	}
+	// 直接清空coldBuf
+	// streams维护了一个简单的环形队列，这里是检查headStream是否过期
+	// 如果过期就要将它清空并将headStream环形队列中的下一个元素。
 	s.coldBuf = s.coldBuf[0:0]
 	s.maybeRotateStreams()
 }
@@ -431,6 +473,7 @@ func (s *noObjectivesSummary) Observe(v float64) {
 	// We increment h.countAndHotIdx so that the counter in the lower
 	// 63 bits gets incremented. At the same time, we get the new value
 	// back, which we can use to find the currently-hot counts.
+	// 原子+1
 	n := atomic.AddUint64(&s.countAndHotIdx, 1)
 	hotCounts := s.counts[n>>63]
 

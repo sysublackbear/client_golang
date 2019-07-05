@@ -80,6 +80,7 @@ type Metric struct {
 
 值得一提，上面这些数据模型既是Metric，又是Collector。
 
+pusher主要与pushgateway相关联：
 
 
 
@@ -143,6 +144,8 @@ client_golang
 │   ├── wrap.go
 └── vendor
 ```
+
+
 
 
 

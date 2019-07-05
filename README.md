@@ -80,8 +80,13 @@ type Metric struct {
 
 值得一提，上面这些数据模型既是Metric，又是Collector。
 
+
+
 pusher主要与pushgateway相关联：
 
+- 业务通过对pusher进行封装，添加上自己业务特有的Metrics，进行wrap包装上报；
+- 底层还是依赖pusher的Push（本质是PUT）方法和Add（本质是POST）方法，把数据gather好送到pushgateway；
+- pushgateway那边，自带的DiskMetricStore（实现了MetricStore接口），在NewDiskMetricStore方法里面会新开一个goroutine执行loop方法，定期将接收到的MetricGroup落地到持久化存储中。
 
 
 
@@ -92,56 +97,56 @@ pusher主要与pushgateway相关联：
 ```bash
 client_golang
 ├── api
-│   └── client.go  -- PromQL的Http Client版本
+│   └── client.go  -- PromQL的Http Client版本
 ├── examples
-│   ├── random
-│   │   └── main.go -- 带Histogram和Summary的HttpSever示例
-│   └── simple
-│       └── main.go -- 简单HttpServer Gather示例
+│   ├── random
+│   │   └── main.go -- 带Histogram和Summary的HttpSever示例
+│   └── simple
+│       └── main.go -- 简单HttpServer Gather示例
 ├── prometheus
-│   ├── collector.go
-│   ├── counter.go
-│   ├── desc.go
-│   ├── doc.go
-│   ├── example_clustermanager_test.go
-│   ├── example_timer_complex_test.go
-│   ├── example_timer_gauge_test.go
-│   ├── example_timer_test.go
-│   ├── examples_test.go
-│   ├── expvar_collector.go
-│   ├── fnv.go
-│   ├── gauge.go
-│   ├── go_collector.go
-│   ├── graphite  --- Prometheus的client_golang支持对接另一套监控系统graphite，这里实现了bridge进行数据推送到graphite
-│   │   └── bridge.go
-│   ├── histogram.go
-│   ├── http.go -- http逻辑
-│   ├── internal
-│   │   └── metric.go
-│   ├── labels.go
-│   ├── metric.go
-│   ├── observer.go
-│   ├── process_collector.go
-│   ├── promauto
-│   │   └── auto.go
-│   ├── promhttp
-│   │   ├── delegator.go
-│   │   ├── http.go
-│   │   ├── instrument_client.go
-│   │   └── instrument_server.go -- 信息采集的server逻辑，装饰器进行对HttpHandler进行包装
-│   ├── push
-│   │   ├── deprecated.go
-│   │   ├── example_add_from_gatherer_test.go
-│   │   └── push.go -- 往服务器主动推送Metric的pusher逻辑
-│   ├── registry.go
-│   ├── summary.go
-│   ├── testutil
-│   │   ├── testutil.go
-│   ├── timer.go
-│   ├── untyped.go
-│   ├── value.go
-│   ├── vec.go
-│   ├── wrap.go
+│   ├── collector.go
+│   ├── counter.go
+│   ├── desc.go
+│   ├── doc.go
+│   ├── example_clustermanager_test.go
+│   ├── example_timer_complex_test.go
+│   ├── example_timer_gauge_test.go
+│   ├── example_timer_test.go
+│   ├── examples_test.go
+│   ├── expvar_collector.go
+│   ├── fnv.go
+│   ├── gauge.go
+│   ├── go_collector.go
+│   ├── graphite  --- Prometheus的client_golang支持对接另一套监控系统graphite，这里实现了bridge进行数据推送到graphite
+│   │   └── bridge.go
+│   ├── histogram.go
+│   ├── http.go -- http逻辑
+│   ├── internal
+│   │   └── metric.go
+│   ├── labels.go
+│   ├── metric.go
+│   ├── observer.go
+│   ├── process_collector.go
+│   ├── promauto
+│   │   └── auto.go
+│   ├── promhttp
+│   │   ├── delegator.go
+│   │   ├── http.go
+│   │   ├── instrument_client.go
+│   │   └── instrument_server.go -- 信息采集的server逻辑，装饰器进行对HttpHandler进行包装
+│   ├── push
+│   │   ├── deprecated.go
+│   │   ├── example_add_from_gatherer_test.go
+│   │   └── push.go -- 往服务器主动推送Metric的pusher逻辑
+│   ├── registry.go
+│   ├── summary.go
+│   ├── testutil
+│   │   ├── testutil.go
+│   ├── timer.go
+│   ├── untyped.go
+│   ├── value.go
+│   ├── vec.go
+│   ├── wrap.go
 └── vendor
 ```
 
@@ -152,4 +157,3 @@ client_golang
 ## 4.更多
 
 更多还是看官方的 [client_golang.README.md](https://github.com/sysublackbear/client_golang/blob/master/client_golang.README.md)吧。
-
